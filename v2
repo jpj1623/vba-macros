@@ -1,0 +1,178 @@
+Option Explicit
+
+Public Sub HighlightDrivingCells()
+
+    Const SCAN_SHEET As String = "Sheet1"
+    Const SCAN_RANGE As String = "A1:M21"
+    Const HIGHLIGHT  As Long = 5296274
+
+    Dim wbk          As Workbook
+    Dim wsScan       As Worksheet
+    Dim scanRng      As Range
+    Dim targetCell   As Range
+    Dim ws           As Worksheet
+    Dim formulaRng   As Range
+    Dim formulaCell  As Range
+    Dim formulaText  As String
+    Dim isDriving    As Boolean
+    Dim hitCount     As Long
+    Dim totalScanned As Long
+    Dim tokens(1 To 6) As String
+    Dim t            As Integer
+
+    Set wbk = ThisWorkbook
+
+    On Error Resume Next
+    Set wsScan = wbk.Worksheets(SCAN_SHEET)
+    On Error GoTo 0
+    If wsScan Is Nothing Then
+        MsgBox "Sheet '" & SCAN_SHEET & "' not found.", vbCritical
+        Exit Sub
+    End If
+
+    Set scanRng = wsScan.Range(SCAN_RANGE)
+    scanRng.Interior.ColorIndex = xlNone
+    hitCount = 0
+    totalScanned = 0
+
+    Application.ScreenUpdating = False
+    Application.StatusBar = "Scanning workbook for real dependents..."
+
+    For Each targetCell In scanRng
+
+        If Not IsEmpty(targetCell) Then
+            totalScanned = totalScanned + 1
+
+            tokens(1) = targetCell.Address(False, False)
+            tokens(2) = targetCell.Address(True, True)
+            tokens(3) = SCAN_SHEET & "!" & tokens(1)
+            tokens(4) = SCAN_SHEET & "!" & tokens(2)
+            tokens(5) = "'" & SCAN_SHEET & "'!" & tokens(1)
+            tokens(6) = "'" & SCAN_SHEET & "'!" & tokens(2)
+
+            isDriving = False
+
+            For Each ws In wbk.Worksheets
+
+                If isDriving Then Exit For
+
+                Set formulaRng = Nothing
+                On Error Resume Next
+                Set formulaRng = ws.Cells.SpecialCells(xlCellTypeFormulas)
+                On Error GoTo 0
+                If formulaRng Is Nothing Then GoTo NextSheet
+
+                For Each formulaCell In formulaRng
+
+                    If isDriving Then Exit For
+                    formulaText = formulaCell.formula
+
+                    ' CHECK 1: Direct reference
+                    For t = 1 To 6
+                        If IsTokenInFormula(tokens(t), formulaText) Then
+                            isDriving = True
+                            Exit For
+                        End If
+                    Next t
+
+                    If isDriving Then Exit For
+
+                    ' CHECK 2: Lookup formula resolves to this cell
+                    Dim upper As String
+                    upper = UCase(formulaText)
+                    If InStr(upper, "VLOOKUP") > 0 Or _
+                       InStr(upper, "HLOOKUP") > 0 Or _
+                       InStr(upper, "XLOOKUP") > 0 Or _
+                       (InStr(upper, "INDEX") > 0 And InStr(upper, "MATCH") > 0) Then
+                        isDriving = LookupResolvesToTarget(formulaCell, formulaText, targetCell)
+                    End If
+
+                Next formulaCell
+
+NextSheet:
+            Next ws
+
+            If isDriving Then
+                targetCell.Interior.Color = HIGHLIGHT
+                hitCount = hitCount + 1
+            End If
+
+        End If
+
+    Next targetCell
+
+    Application.ScreenUpdating = True
+    Application.StatusBar = False
+
+    MsgBox "Scan complete." & vbCrLf & vbCrLf & _
+           "Cells scanned:     " & totalScanned & vbCrLf & _
+           "Cells highlighted: " & hitCount, _
+           vbInformation, "Smart Dependency Checker"
+
+End Sub
+
+
+Private Function LookupResolvesToTarget(ByVal formulaCell As Range, _
+                                         ByVal formulaText As String, _
+                                         ByVal targetCell As Range) As Boolean
+    LookupResolvesToTarget = False
+
+    Dim inner        As String
+    Dim wrapped      As String
+    Dim resolvedAddr As Variant
+
+    inner = Mid(formulaText, 2)
+    wrapped = "=CELL(""address""," & inner & ")"
+
+    resolvedAddr = formulaCell.Parent.Evaluate(wrapped)
+
+    If IsError(resolvedAddr) Then Exit Function
+    If resolvedAddr = "" Then Exit Function
+
+    ' resolvedAddr comes back as [workbook.xlsm]SheetName!$COL$ROW
+    ' Build SheetName!$COL$ROW to check against the end of that string
+    Dim sheetQualified As String
+    sheetQualified = targetCell.Parent.Name & "!" & targetCell.Address(True, True)
+
+    If Right(CStr(resolvedAddr), Len(sheetQualified)) = sheetQualified Then
+        LookupResolvesToTarget = True
+    End If
+
+End Function
+
+
+Private Function IsTokenInFormula(ByVal token As String, _
+                                   ByVal formula As String) As Boolean
+    IsTokenInFormula = False
+    Dim tokLen     As Integer
+    Dim searchFrom As Integer
+    Dim pos        As Integer
+
+    tokLen = Len(token)
+    searchFrom = 1
+
+    Do
+        pos = InStr(searchFrom, formula, token, vbTextCompare)
+        If pos = 0 Then Exit Do
+
+        If pos > 1 Then
+            If Mid(formula, pos - 1, 1) Like "[A-Za-z0-9$]" Then
+                searchFrom = pos + 1
+                GoTo Continue
+            End If
+        End If
+
+        If pos + tokLen <= Len(formula) Then
+            If Mid(formula, pos + tokLen, 1) Like "[A-Za-z0-9$]" Then
+                searchFrom = pos + 1
+                GoTo Continue
+            End If
+        End If
+
+        IsTokenInFormula = True
+        Exit Function
+Continue:
+    Loop
+
+End Function
+
