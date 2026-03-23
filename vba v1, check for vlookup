@@ -1,0 +1,220 @@
+Option Explicit
+
+Public Sub HighlightDrivingCells()
+
+    Const SCAN_SHEET As String = "Sheet1"
+    Const SCAN_RANGE As String = "A1:M21"
+    Const HIGHLIGHT  As Long = 5296274
+
+    Dim wbk          As Workbook
+    Dim wsScan       As Worksheet
+    Dim scanRng      As Range
+    Dim targetCell   As Range
+    Dim ws           As Worksheet
+    Dim formulaCell  As Range
+    Dim formulaRng   As Range
+    Dim formulaText  As String
+    Dim hitCount     As Long
+    Dim totalScanned As Long
+    Dim isDriving    As Boolean
+    Dim tokens(1 To 6) As String
+    Dim t            As Integer
+
+    Set wbk = ThisWorkbook
+
+    On Error Resume Next
+    Set wsScan = wbk.Worksheets(SCAN_SHEET)
+    On Error GoTo 0
+    If wsScan Is Nothing Then
+        MsgBox "Sheet '" & SCAN_SHEET & "' not found.", vbCritical
+        Exit Sub
+    End If
+
+    Set scanRng = wsScan.Range(SCAN_RANGE)
+    scanRng.Interior.ColorIndex = xlNone
+    hitCount = 0
+    totalScanned = 0
+
+    Application.ScreenUpdating = False
+    Application.StatusBar = "Scanning workbook for real dependents..."
+
+    For Each targetCell In scanRng
+
+        If Not IsEmpty(targetCell) Then
+            totalScanned = totalScanned + 1
+
+            tokens(1) = targetCell.Address(False, False)
+            tokens(2) = targetCell.Address(True, True)
+            tokens(3) = SCAN_SHEET & "!" & tokens(1)
+            tokens(4) = SCAN_SHEET & "!" & tokens(2)
+            tokens(5) = "'" & SCAN_SHEET & "'!" & tokens(1)
+            tokens(6) = "'" & SCAN_SHEET & "'!" & tokens(2)
+
+            isDriving = False
+
+            For Each ws In wbk.Worksheets
+
+                If isDriving Then Exit For
+
+                On Error Resume Next
+                Set formulaRng = ws.Cells.SpecialCells(xlCellTypeFormulas)
+                On Error GoTo 0
+
+                If Not formulaRng Is Nothing Then
+
+                    For Each formulaCell In formulaRng
+
+                        If isDriving Then Exit For
+
+                        formulaText = formulaCell.formula
+
+                        ' --- CHECK 1: Direct reference (exact token in formula text) ---
+                        For t = 1 To 6
+                            If tokens(t) <> "" Then
+                                If IsTokenInFormula(tokens(t), formulaText) Then
+                                    isDriving = True
+                                    Exit For
+                                End If
+                            End If
+                        Next t
+
+                        If isDriving Then Exit For
+
+                        ' --- CHECK 2: Lookup formula that resolves to this cell at runtime ---
+                        If IsLookupFormula(formulaText) Then
+                            If LookupResolvesToCell(formulaCell, targetCell) Then
+                                isDriving = True
+                            End If
+                        End If
+
+                    Next formulaCell
+
+                End If
+
+                Set formulaRng = Nothing
+
+            Next ws
+
+            If isDriving Then
+                targetCell.Interior.Color = HIGHLIGHT
+                hitCount = hitCount + 1
+            End If
+
+        End If
+
+    Next targetCell
+
+    Application.ScreenUpdating = True
+    Application.StatusBar = False
+
+    MsgBox "Scan complete." & vbCrLf & vbCrLf & _
+           "Cells scanned : " & totalScanned & vbCrLf & _
+           "Cells highlighted: " & hitCount, _
+           vbInformation, "Smart Dependency Checker"
+
+End Sub
+
+
+' Returns True if the formula is a lookup-type function
+Private Function IsLookupFormula(ByVal formula As String) As Boolean
+    Dim upper As String
+    upper = UCase(formula)
+    IsLookupFormula = (InStr(upper, "VLOOKUP") > 0 Or _
+                       InStr(upper, "HLOOKUP") > 0 Or _
+                       InStr(upper, "INDEX") > 0 Or _
+                       InStr(upper, "XLOOKUP") > 0)
+End Function
+
+
+' For a lookup formula cell, checks whether the result is being pulled FROM targetCell.
+' Strategy: find the return range argument and check if targetCell sits in it,
+' then verify the formula's current evaluated result matches targetCell's value.
+Private Function LookupResolvesToCell(ByVal formulaCell As Range, _
+                                       ByVal targetCell As Range) As Boolean
+    On Error GoTo Fail
+
+    LookupResolvesToCell = False
+
+    Dim formulaText As String
+    Dim upper       As String
+    formulaText = formulaCell.formula
+    upper = UCase(formulaText)
+
+    ' --- Get the formula's current result ---
+    Dim result As Variant
+    result = formulaCell.Value
+    If IsError(result) Then Exit Function
+
+    ' --- targetCell must be in the same value range ---
+    ' We extract range references from the formula and test if targetCell is inside any of them.
+    ' Rather than full formula parsing, we use a reliable approach:
+    ' Ask Excel to resolve the formula's precedents and check if targetCell is among them.
+    
+    ' Get precedent ranges for this formula cell
+    Dim precRng As Range
+    On Error Resume Next
+    Set precRng = formulaCell.Precedents
+    On Error GoTo Fail
+    
+    If precRng Is Nothing Then Exit Function
+    
+    ' Check if targetCell is within the precedent ranges
+    Dim intersectRng As Range
+    On Error Resume Next
+    Set intersectRng = Application.Intersect(precRng, targetCell)
+    On Error GoTo Fail
+    
+    If intersectRng Is Nothing Then Exit Function
+    
+    ' targetCell is in the precedent range — now verify the result actually matches.
+    ' This confirms the lookup is currently resolving TO this specific cell.
+    If result = targetCell.Value Then
+        LookupResolvesToCell = True
+    End If
+
+    Exit Function
+Fail:
+    LookupResolvesToCell = False
+End Function
+
+
+Private Function IsTokenInFormula(ByVal token As String, _
+                                   ByVal formula As String) As Boolean
+    Dim pos        As Integer
+    Dim tokLen     As Integer
+    Dim charBefore As String
+    Dim charAfter  As String
+    Dim searchFrom As Integer
+
+    IsTokenInFormula = False
+    tokLen = Len(token)
+    searchFrom = 1
+
+    Do
+        pos = InStr(searchFrom, formula, token, vbTextCompare)
+        If pos = 0 Then Exit Do
+
+        If pos > 1 Then
+            charBefore = Mid(formula, pos - 1, 1)
+            If charBefore Like "[A-Za-z0-9$]" Then
+                searchFrom = pos + 1
+                GoTo NextIteration
+            End If
+        End If
+
+        If pos + tokLen <= Len(formula) Then
+            charAfter = Mid(formula, pos + tokLen, 1)
+            If charAfter Like "[A-Za-z0-9$]" Then
+                searchFrom = pos + 1
+                GoTo NextIteration
+            End If
+        End If
+
+        IsTokenInFormula = True
+        Exit Function
+
+NextIteration:
+    Loop
+
+End Function
+
