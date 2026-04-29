@@ -64,3 +64,112 @@ Sub FindNonDrivingCells()
     End If
 
     If wsTest Is Nothing Then
+        MsgBox "Sheet '" & testSheet & "' not found in the target file.", vbCritical
+        If Not alreadyOpen Then targetWb.Close False
+        Exit Sub
+    End If
+
+    Dim monitorRange As Range
+    Dim testRange    As Range
+
+    On Error Resume Next
+    Set monitorRange = wsMonitor.Range(monitorAddr)
+    Set testRange    = wsTest.Range(testAddr)
+    On Error GoTo 0
+
+    If monitorRange Is Nothing Then
+        MsgBox "Invalid monitor range: " & monitorAddr, vbCritical
+        If Not alreadyOpen Then targetWb.Close False
+        Exit Sub
+    End If
+
+    If testRange Is Nothing Then
+        MsgBox "Invalid test range: " & testAddr, vbCritical
+        If Not alreadyOpen Then targetWb.Close False
+        Exit Sub
+    End If
+
+    Dim mRows As Long, mCols As Long
+    mRows = monitorRange.Rows.Count
+    mCols = monitorRange.Columns.Count
+
+    Dim baseline() As Variant
+    Dim afterDel() As Variant
+    ReDim baseline(1 To mRows, 1 To mCols)
+    ReDim afterDel(1 To mRows, 1 To mCols)
+
+    Dim i As Long, j As Long
+    For i = 1 To mRows
+        For j = 1 To mCols
+            baseline(i, j) = monitorRange.Cells(i, j).Value
+        Next j
+    Next i
+
+    Application.ScreenUpdating = False
+    Application.Calculation = xlCalculationManual
+
+    testRange.Interior.ColorIndex = xlNone
+
+    Dim cell         As Range
+    Dim hasFormula   As Boolean
+    Dim savedFormula As String
+    Dim savedValue   As Variant
+    Dim changed      As Boolean
+
+    For Each cell In testRange.Cells
+
+        If cell.Formula = "" Then
+            cell.Interior.Color = RGB(255, 105, 105)
+            GoTo NextCell
+        End If
+
+        hasFormula = (Left(cell.Formula, 1) = "=")
+        If hasFormula Then
+            savedFormula = cell.Formula
+        Else
+            savedValue = cell.Value
+        End If
+
+        cell.ClearContents
+        Application.Calculate
+
+        For i = 1 To mRows
+            For j = 1 To mCols
+                afterDel(i, j) = monitorRange.Cells(i, j).Value
+            Next j
+        Next i
+
+        changed = False
+        For i = 1 To mRows
+            For j = 1 To mCols
+                If CStr(baseline(i, j)) <> CStr(afterDel(i, j)) Then
+                    changed = True
+                    Exit For
+                End If
+            Next j
+            If changed Then Exit For
+        Next i
+
+        If hasFormula Then
+            cell.Formula = savedFormula
+        Else
+            cell.Value = savedValue
+        End If
+        Application.Calculate
+
+        If Not changed Then
+            cell.Interior.Color = RGB(255, 105, 105)
+        End If
+
+NextCell:
+    Next cell
+
+    Application.Calculation = xlCalculationAutomatic
+    Application.ScreenUpdating = True
+
+    targetWb.Save
+
+    MsgBox "Done! Red cells in '" & testSheet & "'!" & testAddr & _
+           " have no effect on '" & monitorSheet & "'!" & monitorAddr & ".", vbInformation
+
+End Sub
