@@ -98,6 +98,12 @@ Sub FindNonDrivingCells()
     ReDim baseline(1 To mRows, 1 To mCols)
     ReDim afterDel(1 To mRows, 1 To mCols)
 
+    Application.ScreenUpdating = False
+    Application.EnableEvents = False
+    Application.Calculation = xlCalculationManual
+
+    ' ── Capture baseline with CalculateFull to ensure clean starting state ──
+    Application.CalculateFull
     Dim i As Long, j As Long
     For i = 1 To mRows
         For j = 1 To mCols
@@ -105,24 +111,32 @@ Sub FindNonDrivingCells()
         Next j
     Next i
 
-    Application.ScreenUpdating = False
-    Application.Calculation = xlCalculationManual
-
     testRange.Interior.ColorIndex = xlNone
 
-    Dim cell         As Range
-    Dim hasFormula   As Boolean
-    Dim savedFormula As String
-    Dim savedValue   As Variant
-    Dim changed      As Boolean
+    Dim cell            As Range
+    Dim hasFormula      As Boolean
+    Dim savedFormula    As String
+    Dim savedValue      As Variant
+    Dim changed         As Boolean
+    Dim restoreFailed   As Boolean
+    Dim failedCells     As String
+    Dim cellCount       As Long
+    Dim totalCells      As Long
+
+    totalCells = testRange.Cells.Count
 
     For Each cell In testRange.Cells
 
+        cellCount = cellCount + 1
+        Application.StatusBar = "Analysing cell " & cellCount & " of " & totalCells & " (" & cell.Address & ")"
+
+        ' Blank cells can't drive anything
         If cell.Formula = "" Then
             cell.Interior.Color = RGB(255, 105, 105)
             GoTo NextCell
         End If
 
+        ' ── Save original content ───────────────────────────────────────────
         hasFormula = (Left(cell.Formula, 1) = "=")
         If hasFormula Then
             savedFormula = cell.Formula
@@ -130,15 +144,18 @@ Sub FindNonDrivingCells()
             savedValue = cell.Value
         End If
 
+        ' ── Delete and do a full recalc ─────────────────────────────────────
         cell.ClearContents
-        Application.Calculate
+        Application.CalculateFull
 
+        ' ── Snapshot monitor range after deletion ───────────────────────────
         For i = 1 To mRows
             For j = 1 To mCols
                 afterDel(i, j) = monitorRange.Cells(i, j).Value
             Next j
         Next i
 
+        ' ── Compare ─────────────────────────────────────────────────────────
         changed = False
         For i = 1 To mRows
             For j = 1 To mCols
@@ -150,12 +167,40 @@ Sub FindNonDrivingCells()
             If changed Then Exit For
         Next i
 
+        ' ── Restore with error handling ─────────────────────────────────────
+        restoreFailed = False
+        On Error Resume Next
         If hasFormula Then
             cell.Formula = savedFormula
         Else
             cell.Value = savedValue
         End If
-        Application.Calculate
+
+        ' Verify restore actually worked
+        If Err.Number <> 0 Then
+            restoreFailed = True
+            Err.Clear
+        End If
+        On Error GoTo 0
+
+        ' Double-check: if cell is still empty after restore, flag it
+        If cell.Formula = "" Then restoreFailed = True
+
+        If restoreFailed Then
+            failedCells = failedCells & cell.Address & " "
+            cell.Interior.Color = RGB(255, 200, 0)  ' amber = restore failed, result unreliable
+            GoTo NextCell
+        End If
+
+        ' ── Full recalc to re-settle the model ──────────────────────────────
+        Application.CalculateFull
+
+        ' ── Re-snapshot baseline to neutralise volatile functions ────────────
+        For i = 1 To mRows
+            For j = 1 To mCols
+                baseline(i, j) = monitorRange.Cells(i, j).Value
+            Next j
+        Next i
 
         If Not changed Then
             cell.Interior.Color = RGB(255, 105, 105)
@@ -165,11 +210,23 @@ NextCell:
     Next cell
 
     Application.Calculation = xlCalculationAutomatic
+    Application.EnableEvents = True
     Application.ScreenUpdating = True
+    Application.StatusBar = False
 
     targetWb.Save
 
-    MsgBox "Done! Red cells in '" & testSheet & "'!" & testAddr & _
-           " have no effect on '" & monitorSheet & "'!" & monitorAddr & ".", vbInformation
+    Dim msg As String
+    msg = "Done! Red cells in '" & testSheet & "'!" & testAddr & _
+          " have no effect on '" & monitorSheet & "'!" & monitorAddr & "."
+
+    If failedCells <> "" Then
+        msg = msg & vbCrLf & vbCrLf & _
+              "WARNING: The following cells could not be restored and are highlighted amber " & _
+              "(array formulas, table references, or external links may need manual review):" & _
+              vbCrLf & failedCells
+    End If
+
+    MsgBox msg, vbInformation
 
 End Sub
