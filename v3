@@ -1,0 +1,66 @@
+Sub FindNonDrivingCells()
+
+    Dim masterWs As Worksheet
+    On Error Resume Next
+    Set masterWs = ThisWorkbook.Sheets("Master")
+    On Error GoTo 0
+
+    If masterWs Is Nothing Then
+        MsgBox "Master sheet not found.", vbCritical
+        Exit Sub
+    End If
+
+    Dim rawPath      As String
+    Dim monitorSheet As String
+    Dim monitorAddr  As String
+    Dim testSheet    As String
+    Dim testAddr     As String
+
+    rawPath      = Trim(Replace(CStr(masterWs.Range("C2").Value), "/", "\"))
+    monitorSheet = Trim(CStr(masterWs.Range("C3").Value))
+    monitorAddr  = Trim(CStr(masterWs.Range("C4").Value))
+    testSheet    = Trim(CStr(masterWs.Range("C5").Value))
+    testAddr     = Trim(CStr(masterWs.Range("C6").Value))
+
+    If rawPath = "" Or monitorSheet = "" Or monitorAddr = "" Or testSheet = "" Or testAddr = "" Then
+        MsgBox "Please fill in all five inputs in the Master sheet (C2:C6).", vbExclamation
+        Exit Sub
+    End If
+
+    If Dir(rawPath) = "" Then
+        MsgBox "File not found:" & vbCrLf & rawPath, vbCritical
+        Exit Sub
+    End If
+
+    Dim targetWb    As Workbook
+    Dim alreadyOpen As Boolean
+    alreadyOpen = False
+
+    Dim wb As Workbook
+    For Each wb In Application.Workbooks
+        If LCase(wb.FullName) = LCase(rawPath) Then
+            Set targetWb = wb
+            alreadyOpen = True
+            Exit For
+        End If
+    Next wb
+
+    If Not alreadyOpen Then
+        Set targetWb = Workbooks.Open(rawPath)
+    End If
+
+    Dim wsMonitor As Worksheet
+    Dim wsTest    As Worksheet
+
+    On Error Resume Next
+    Set wsMonitor = targetWb.Sheets(monitorSheet)
+    Set wsTest    = targetWb.Sheets(testSheet)
+    On Error GoTo 0
+
+    If wsMonitor Is Nothing Then
+        MsgBox "Sheet '" & monitorSheet & "' not found in the target file.", vbCritical
+        If Not alreadyOpen Then targetWb.Close False
+        Exit Sub
+    End If
+
+    If wsTest Is Nothing Then
