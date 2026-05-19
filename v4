@@ -1,1 +1,129 @@
-Pricing cycle commentary: DOWN
+Sub FindNonDrivingCells()
+
+    Dim checkerWs As Worksheet
+    On Error Resume Next
+    Set checkerWs = ThisWorkbook.Sheets("Dependency Checker")
+    On Error GoTo 0
+
+    If checkerWs Is Nothing Then
+        MsgBox "Sheet 'Dependency Checker' not found in this workbook.", vbCritical
+        Exit Sub
+    End If
+
+    Dim rawPath   As String
+    Dim sheetName As String
+    Dim rangeAddr As String
+
+    rawPath   = Trim(Replace(CStr(checkerWs.Range("C2").Value), "/", "\"))
+    sheetName = Trim(CStr(checkerWs.Range("C3").Value))
+    rangeAddr = Trim(CStr(checkerWs.Range("C4").Value))
+
+    If rawPath = "" Or sheetName = "" Or rangeAddr = "" Then
+        MsgBox "Please fill in all three inputs:" & vbCrLf & _
+               "  C2  - File path" & vbCrLf & _
+               "  C3  - Sheet name" & vbCrLf & _
+               "  C4  - Range (e.g. A3:B20)", vbExclamation
+        Exit Sub
+    End If
+
+    If Dir(rawPath) = "" Then
+        MsgBox "File not found:" & vbCrLf & rawPath, vbCritical
+        Exit Sub
+    End If
+
+    ' -- Open workbook if not already open --
+    Dim targetWb    As Workbook
+    Dim alreadyOpen As Boolean
+    alreadyOpen = False
+
+    Dim wb As Workbook
+    For Each wb In Application.Workbooks
+        If LCase(wb.FullName) = LCase(rawPath) Then
+            Set targetWb = wb
+            alreadyOpen = True
+            Exit For
+        End If
+    Next wb
+
+    If Not alreadyOpen Then
+        Set targetWb = Workbooks.Open(rawPath)
+    End If
+
+    ' -- Resolve sheet --
+    Dim targetWs As Worksheet
+    On Error Resume Next
+    Set targetWs = targetWb.Sheets(sheetName)
+    On Error GoTo 0
+
+    If targetWs Is Nothing Then
+        MsgBox "Sheet '" & sheetName & "' not found in:" & vbCrLf & rawPath, vbCritical
+        If Not alreadyOpen Then targetWb.Close False
+        Exit Sub
+    End If
+
+    ' -- Resolve range --
+    Dim targetRange As Range
+    On Error Resume Next
+    Set targetRange = targetWs.Range(rangeAddr)
+    On Error GoTo 0
+
+    If targetRange Is Nothing Then
+        MsgBox "Invalid range: " & rangeAddr, vbCritical
+        If Not alreadyOpen Then targetWb.Close False
+        Exit Sub
+    End If
+
+    ' -- Run the scan --
+    Application.ScreenUpdating = False
+
+    targetWb.Activate
+    targetWs.Activate
+
+    targetRange.Interior.ColorIndex = xlNone
+
+    Dim cell       As Range
+    Dim depCell    As Range
+    Dim errNum     As Long
+    Dim noDep      As Long
+    Dim cellCount  As Long
+    Dim totalCells As Long
+
+    totalCells = targetRange.Cells.Count
+
+    For Each cell In targetRange.Cells
+
+        cellCount = cellCount + 1
+        Application.StatusBar = "Checking cell " & cellCount & " of " & totalCells & " (" & cell.Address & ")"
+
+        ' Draw tracer arrows to dependents; navigate to first one.
+        ' Excel raises error 1004 if no dependent arrows exist.
+        cell.ShowDependents
+
+        Set depCell = Nothing
+        errNum = 0
+        On Error Resume Next
+        Set depCell = cell.NavigateArrow(TowardPrecedent:=False, ArrowNumber:=1)
+        errNum = Err.Number
+        Err.Clear
+        On Error GoTo 0
+
+        cell.Parent.ClearArrows
+
+        ' No error = dependent found; error = none exist -> flag red
+        If errNum <> 0 Then
+            cell.Interior.Color = RGB(255, 105, 105)
+            noDep = noDep + 1
+        End If
+
+    Next cell
+
+    targetWs.ClearArrows
+
+    Application.ScreenUpdating = True
+    Application.StatusBar = False
+
+    MsgBox "Done! " & noDep & " of " & totalCells & " cell(s) in '" & _
+           sheetName & "'!" & rangeAddr & " have no dependents (highlighted red).", _
+           vbInformation
+
+End Sub
