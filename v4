@@ -31,7 +31,6 @@ Sub FindNonDrivingCells()
         Exit Sub
     End If
 
-    ' -- Open workbook if not already open --
     Dim targetWb    As Workbook
     Dim alreadyOpen As Boolean
     alreadyOpen = False
@@ -49,7 +48,6 @@ Sub FindNonDrivingCells()
         Set targetWb = Workbooks.Open(rawPath)
     End If
 
-    ' -- Resolve sheet --
     Dim targetWs As Worksheet
     On Error Resume Next
     Set targetWs = targetWb.Sheets(sheetName)
@@ -61,7 +59,6 @@ Sub FindNonDrivingCells()
         Exit Sub
     End If
 
-    ' -- Resolve range --
     Dim targetRange As Range
     On Error Resume Next
     Set targetRange = targetWs.Range(rangeAddr)
@@ -73,57 +70,38 @@ Sub FindNonDrivingCells()
         Exit Sub
     End If
 
-    ' -- Run the scan --
     Application.ScreenUpdating = False
-
     targetWb.Activate
     targetWs.Activate
-
     targetRange.Interior.ColorIndex = xlNone
 
     Dim cell       As Range
-    Dim depCell    As Range
-    Dim errNum     As Long
+    Dim deps       As Range
     Dim noDep      As Long
     Dim cellCount  As Long
     Dim totalCells As Long
-
     totalCells = targetRange.Cells.Count
 
     For Each cell In targetRange.Cells
-
         cellCount = cellCount + 1
-        Application.StatusBar = "Checking cell " & cellCount & " of " & totalCells & " (" & cell.Address & ")"
+        Application.StatusBar = "Checking " & cellCount & " of " & totalCells & " (" & cell.Address(False, False) & ")"
 
-        ' Draw tracer arrows to dependents; navigate to first one.
-        ' Excel raises error 1004 if no dependent arrows exist.
-        cell.ShowDependents
-
-        Set depCell = Nothing
-        errNum = 0
+        ' Range.Dependents is the direct equivalent of Trace Dependents.
+        ' It errors if no dependents exist anywhere in the workbook.
+        Set deps = Nothing
         On Error Resume Next
-        Set depCell = cell.NavigateArrow(TowardPrecedent:=False, ArrowNumber:=1)
-        errNum = Err.Number
-        Err.Clear
+        Set deps = cell.Dependents
         On Error GoTo 0
 
-        cell.Parent.ClearArrows
-
-        ' No error = dependent found; error = none exist -> flag red
-        If errNum <> 0 Then
+        If deps Is Nothing Then
             cell.Interior.Color = RGB(255, 105, 105)
             noDep = noDep + 1
         End If
-
     Next cell
-
-    targetWs.ClearArrows
 
     Application.ScreenUpdating = True
     Application.StatusBar = False
 
-    MsgBox "Done! " & noDep & " of " & totalCells & " cell(s) in '" & _
-           sheetName & "'!" & rangeAddr & " have no dependents (highlighted red).", _
-           vbInformation
+    MsgBox "Done! " & noDep & " of " & totalCells & " cell(s) highlighted red (no dependents anywhere in the workbook).", vbInformation
 
 End Sub
